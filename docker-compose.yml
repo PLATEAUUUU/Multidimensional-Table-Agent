@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  api:
+    image: python:3.11-slim
+    working_dir: /workspace
+    command: >
+      sh -lc "pip install --no-cache-dir -r requirements.txt &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/workspace
+
+  web:
+    image: node:20-alpine
+    working_dir: /workspace/web
+    command: sh -lc "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+      VITE_WS_URL: ws://localhost:8000/ws/interview/demo-session
+    volumes:
+      - ./:/workspace
+      - web_node_modules:/workspace/web/node_modules
+    depends_on:
+      - api
+
+volumes:
+  web_node_modules:
