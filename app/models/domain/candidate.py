@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.models.domain.resume import Resume
 from ..enums import CandidateProcessStatus, InterviewRoundType
 
 
@@ -20,7 +22,7 @@ class Candidate(BaseModel):
     candidate_name: str = Field(..., description="候选人姓名")
     target_position: str | None = Field(default=None, description="候选人目标岗位")
 
-    resume_id: str | None = Field(default=None, description="关联简历 ID")
+    resume: Resume | None = Field(default=None, description="关联简历")
 
     screening_passed: bool | None = Field(default=None, description="HR 初筛是否通过")
     process_status: CandidateProcessStatus = Field(..., description="候选人整体流程状态")

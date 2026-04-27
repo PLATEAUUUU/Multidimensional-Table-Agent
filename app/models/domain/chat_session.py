@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
+from ..enums import InterviewRoundStatus, InterviewRoundType
 
 
 class ChatSession(BaseModel):
@@ -19,6 +20,5 @@ class ChatSession(BaseModel):
     id: str | None = Field(default=None, description="内部主键")
     session_id: str = Field(..., description="聊天会话业务 ID")
     candidate_id: str = Field(..., description="候选人 ID")
-    round_id: str = Field(..., description="所属面试轮次 ID")
-    status: str = Field(..., description="会话状态，例如 ACTIVE 或 CLOSED")
-
+    round_type: InterviewRoundType = Field(..., description="所属面试轮次")
+    status: InterviewRoundStatus = Field(..., description="聊天会话状态")
