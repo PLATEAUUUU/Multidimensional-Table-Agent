@@ -1,2 +1,7 @@
-"""Tool abstractions."""
+"""
+app.models 包定义。
+
+创建时间: 2026-04-27
+开发人: zcry
+"""
 
