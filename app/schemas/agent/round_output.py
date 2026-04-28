@@ -1,5 +1,5 @@
 """
-Agent 轮次输出 DTO 定义
+Agent 输出 DTO 定义
 
 创建时间: 2026-04-28
 开发人: zcry
@@ -9,27 +9,36 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 from app.models.domain.candidate import Candidate
 from app.models.domain.resume import Resume
 from app.models.domain.evaluation import Evaluation
-from app.models.domain.interview_round import InterviewRound
+from app.models.domain.interview_round import InterviewRound, InterviewRoundType
 from app.models.domain.interviewer import Interviewer
 from app.models.domain.chat_message import ChatMessage
+from .base_agent_output import BaseAgentOutput
 
-class ResumeParseOutput(BaseModel):
+class ResumeParseOutput(BaseAgentOutput):
     """简历解析节点输出"""
 
     model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    output_type: str = Field(default="resume_parse", description="输出类型")
+    decision: Literal["parsed"] = Field(default="parsed", description="解析完成")
 
     candidate: Candidate = Field(..., description="解析得到的候选人实体")
     resume: Resume = Field(..., description="解析得到的简历实体")
 
 
-class HRScreeningOutput(BaseModel):
+
+class HRScreeningOutput(BaseAgentOutput):
     """HR 初筛节点输出"""
 
-    model_config = ConfigDict(from_attributes=True, extra="forbid")
+    output_type: str = Field(default="hr_screening", description="输出类型")
+    round_type: InterviewRoundType = Field(
+        default=InterviewRoundType.HR_SCREENING,
+        description="HR 初筛轮次",
+    )
 
     decision: Literal["pass", "reject"] = Field(..., description="初筛结论")
     evaluation: Evaluation = Field(..., description="HR 初筛评价")
@@ -39,10 +48,11 @@ class HRScreeningOutput(BaseModel):
     next_interviewer: Interviewer | None = Field(default=None, description="下一轮面试官")
 
 
-class InterviewRoundOutput(BaseModel):
+class InterviewRoundOutput(BaseAgentOutput):
     """面试轮次 Agent 输出"""
 
-    model_config = ConfigDict(from_attributes=True, extra="forbid")
+    output_type: str = Field(default="interview_round", description="输出类型")
+    round_type: InterviewRoundType = Field(..., description="当前面试轮次")
 
     decision: Literal["pass", "reject", "continue"] = Field(..., description="本次 Agent 决策")
 

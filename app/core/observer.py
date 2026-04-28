@@ -11,6 +11,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+# TODO:更新内容：
+# 增加 record_agent_success(...)
+# 增加 record_agent_failure(...)
+# 增加 record_tool_call(...)
+# 增加 record_tool_result(...)
+
 
 _trace_id_context: contextvars.ContextVar[str] = contextvars.ContextVar("trace_id", default="-")
 
