@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
+from time import perf_counter
 from typing import Any, Generic, TypeVar
 from uuid import uuid4
 
@@ -64,33 +65,44 @@ class BaseAgent(ABC, Generic[OutputT]):
     async def __call__(self, state: InterviewState) -> dict[str, Any]:
         """Agent 统一执行入口"""
 
+        started_at = perf_counter()
         trace_id = self.observer.ensure_trace_id(state.get("trace_id"))
         run_id = uuid4().hex
 
+        base_metadata = {
+            "run_id": run_id,
+            "candidate_id": state.get("candidate_id"),
+            "current_round": str(state.get("current_round")),
+            "process_status": str(state.get("process_status")),
+            "active_agent": state.get("active_agent"),
+        }
+
+        # -------- 记录调用开始 --------
         self.observer.record_agent_call(
             agent_name=self.agent_name,
             trace_id=trace_id,
-            metadata={
-                "run_id": run_id,
-                "candidate_id": state.get("candidate_id"),
-                "current_round": str(state.get("current_round")),
-                "process_status": str(state.get("process_status")),
-                "active_agent": state.get("active_agent"),
-            },
+            metadata=base_metadata,
         )
 
         try:
+            # -------- 输入安全 --------
             await self._preflight(state)
 
+            # -------- 执行 Agent --------
             raw_output = await self._run(state)
+
+            # -------- 输出归一化 / 结构校验 --------
             normalized_output = self._normalize_output(raw_output)
 
+            # -------- 输出安全 --------
             await self._audit_output(normalized_output)
 
+            # -------- 转换为 State Patch --------
             patch = self._to_state_patch(normalized_output)
             if not isinstance(patch, dict):
                 raise TypeError(f"{self.agent_name}._to_state_patch 必须返回 dict[str, Any]")
 
+            # -------- 注入运行信息 --------
             patch["trace_id"] = trace_id
             patch["run_id"] = run_id
             patch["active_agent"] = self.agent_name
@@ -102,12 +114,53 @@ class BaseAgent(ABC, Generic[OutputT]):
                 patch.get("token_usage"),
             )
 
+            duration_ms = int((perf_counter() - started_at) * 1000)
+
+            # -------- 记录成功 --------
+            self.observer.record_agent_success(
+                agent_name=self.agent_name,
+                trace_id=trace_id,
+                metadata={
+                    **base_metadata,
+                    "duration_ms": duration_ms,
+                    "output_mode": "structured"
+                    if isinstance(normalized_output, BaseModel)
+                    else "patch",
+                    "patch_keys": sorted(patch.keys()),
+                },
+            )
+
             return patch
 
-        except SecurityInterceptionError:
+        except SecurityInterceptionError as exc:
+            duration_ms = int((perf_counter() - started_at) * 1000)
+
+            self.observer.record_agent_failure(
+                agent_name=self.agent_name,
+                trace_id=trace_id,
+                error=exc,
+                metadata={
+                    **base_metadata,
+                    "duration_ms": duration_ms,
+                    "stage": "security",
+                },
+            )
             raise
 
         except ValidationError as exc:
+            duration_ms = int((perf_counter() - started_at) * 1000)
+
+            self.observer.record_agent_failure(
+                agent_name=self.agent_name,
+                trace_id=trace_id,
+                error=exc,
+                metadata={
+                    **base_metadata,
+                    "duration_ms": duration_ms,
+                    "stage": "output_validation",
+                },
+            )
+
             self.logger.exception("Agent output validation failed: %s", self.agent_name)
             raise BizException(
                 ErrorCode.AGENT_EXECUTION_FAILED,
@@ -116,6 +169,19 @@ class BaseAgent(ABC, Generic[OutputT]):
             ) from exc
 
         except Exception as exc:
+            duration_ms = int((perf_counter() - started_at) * 1000)
+
+            self.observer.record_agent_failure(
+                agent_name=self.agent_name,
+                trace_id=trace_id,
+                error=exc,
+                metadata={
+                    **base_metadata,
+                    "duration_ms": duration_ms,
+                    "stage": "execution",
+                },
+            )
+
             self.logger.exception("Agent execution failed: %s", self.agent_name)
             raise BizException(
                 ErrorCode.AGENT_EXECUTION_FAILED,
@@ -154,7 +220,10 @@ class BaseAgent(ABC, Generic[OutputT]):
         if not allowed:
             raise SecurityInterceptionError(f"Output rejected for agent {self.agent_name}")
 
-    def _normalize_output(self, raw_output: dict[str, Any] | BaseModel) -> OutputT | dict[str, Any]:
+    def _normalize_output(
+        self,
+        raw_output: dict[str, Any] | BaseModel,
+    ) -> OutputT | dict[str, Any]:
         """
         统一输出归一化：
 
