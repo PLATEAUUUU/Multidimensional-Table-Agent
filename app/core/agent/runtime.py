@@ -1,6 +1,6 @@
 # app/models/domain/agent_run.py
 """
-SubAgent 运行时记录 DTO
+SubAgent 运行时记录
 
 创建时间：2026/4/28
 开发人：zcry
@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from ..tools.result import ToolCallRecord
 
 # TODO:更新内容
 # AgentRunRecord 增加：
@@ -21,24 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field
 # finished_at
 # duration_ms
 # trace_id
-# ToolCallRecord 增加：
-# duration_ms
-# trace_id
-# run_id
-# error_code
-
-
-class ToolCallRecord(BaseModel):
-    """工具调用记录"""
-
-    model_config = ConfigDict(from_attributes=True, extra="forbid")
-
-    tool_name: str = Field(..., description="工具名称")
-    arguments: dict[str, Any] = Field(default_factory=dict, description="工具参数")
-    result: dict[str, Any] | str | None = Field(default=None, description="工具返回结果")
-    success: bool = Field(..., description="是否成功")
-    error_message: str | None = Field(default=None, description="错误信息")
-    created_at: str = Field(..., description="调用时间")
 
 
 class AgentRunRecord(BaseModel):

@@ -14,6 +14,15 @@ class ToolInput(BaseModel):
 InputT = TypeVar("InputT", bound=ToolInput)
 
 
+#TODO：
+# 定义 ToolInput
+# 定义 BaseTool
+# 约束每个工具必须有：
+# name
+# description
+# ainvoke(input_data)
+
+
 class BaseTool(ABC, Generic[InputT]):
     """Base class for all tools with Pydantic-validated inputs."""
 
