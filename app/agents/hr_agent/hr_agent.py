@@ -8,7 +8,7 @@ from app.agents.interview_state import InterviewState
 
 
 class HrAgent(BaseAgent):
-    agent_name = "hr"
+    agent_name = "hr_agent"
     allowed_tools = ["feishu_sync", "structured_scorecard"]
     output_model = None
 

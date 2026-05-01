@@ -18,6 +18,7 @@ class ToolCallContext(BaseModel):
 
     说明：
     - runtime.py 在执行工具前应先构造这个对象
+    - tool_call_id 用于唯一标识一次具体的工具调用，方便日志、重试和结果配对
     """
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
@@ -25,6 +26,11 @@ class ToolCallContext(BaseModel):
     run_id: str = Field(..., description="当前 Agent 执行 ID")
     tool_name: str = Field(..., description="工具名称")
     agent_name: str | None = Field(default=None, description="调用该工具的 Agent 名称")
+    tool_call_id: str | None = Field(
+        default=None,
+        description="单次工具调用 ID，用于日志追踪、重试和结果配对",
+    )
+
 
 
 class ToolCallRecord(BaseModel):

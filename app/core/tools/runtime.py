@@ -1,7 +1,7 @@
 """
 工具执行外壳
 
-创建时间：2026/4/28
+创建时间：2026/4/29
 开发人：zcry
 """
 
@@ -245,9 +245,9 @@ class ToolRuntime:
         parsed_args: ToolInput | BaseModel,
     ) -> dict[str, Any]:
         """
-        真正执行工具本体。
+        真正执行工具本体
 
-        这里不做业务逻辑，只负责调用工具接口并做最基本的输出约束。
+        这里不做业务逻辑，只负责调用工具接口并做最基本的输出约束
         """
         result = await tool.ainvoke(parsed_args)  # type: ignore[arg-type]
 
@@ -262,7 +262,7 @@ class ToolRuntime:
 
     def _resolve_input_model(self, tool: BaseTool[Any]) -> type[ToolInput] | None:
         """
-        从工具实例读取输入 schema。
+        从工具实例读取输入 schema
 
         推荐每个工具声明：
             input_model = SomeToolInput
@@ -295,7 +295,7 @@ class ToolRuntime:
         max_attempts: int,
     ) -> bool:
         """
-        工具重试策略。
+        工具重试策略
 
         当前保守策略：
         - ToolTimeoutError：允许重试
@@ -323,11 +323,7 @@ class ToolRuntime:
         max_attempts: int,
     ) -> list[str]:
         """
-        根据工具、错误和上下文生成建议动作。
-
-        说明：
-        - suggest 是 runtime 的职责，不是 errors.py 的职责
-        - 同一个错误类型，在不同工具上建议可能完全不同
+        根据工具、错误和上下文生成建议动作
         """
         suggestions: list[str] = []
 
@@ -388,7 +384,7 @@ class ToolRuntime:
         max_attempts: int,
     ) -> ToolResult:
         """
-        统一构造失败 ToolResult。
+        统一构造失败 ToolResult
         """
         suggest = self._build_suggestions(
             tool,
@@ -420,11 +416,11 @@ class ToolRuntime:
         result: ToolResult,
     ) -> ToolCallRecord:
         """
-        为日志和持久化构造调用记录。
+        为日志和持久化构造调用记录
 
         说明：
-        - ToolCallRecord 是“调用事实”
-        - ToolResult 是“执行结果”
+        - ToolCallRecord 是调用记录
+        - ToolResult 是执行结果
         """
         finished_at = self._utcnow()
         return ToolCallRecord(
@@ -444,7 +440,7 @@ class ToolRuntime:
         max_attempts: int,
     ) -> None:
         """
-        把工具结果写入 observer。
+        把工具结果写入 observer
         """
         metadata: dict[str, Any] = {
             "run_id": result.run_id,
@@ -468,7 +464,7 @@ class ToolRuntime:
 
     async def _emit_record(self, record: ToolCallRecord) -> None:
         """
-        把 ToolCallRecord 发给外部 sink，用于落日志或持久化。
+        把 ToolCallRecord 发给外部 sink，用于落日志或持久化
         """
         if self.record_sink is None:
             return
@@ -479,7 +475,7 @@ class ToolRuntime:
 
     def _serialize_args(self, raw_args: Mapping[str, Any] | BaseModel) -> dict[str, Any]:
         """
-        统一把输入参数转成可记录的 dict。
+        统一把输入参数转成可记录的 dict
         """
         if isinstance(raw_args, BaseModel):
             return raw_args.model_dump()
@@ -487,21 +483,21 @@ class ToolRuntime:
 
     def _summarize_data(self, data: Any) -> Any:
         """
-        生成轻量级结果摘要，避免 observer 日志过重。
+        生成轻量级结果摘要，避免 observer 日志过重
 
         当前策略比较保守：
         - dict 原样返回
         - 其他类型直接返回
-        你后续可以根据日志量再做截断和脱敏。
+        你后续可以根据日志量再做截断和脱敏
         """
         return data
 
     def _elapsed_ms_from(self, started_at: datetime) -> int:
         """
-        计算从 started_at 到现在的耗时（毫秒）。
+        计算从 started_at 到现在的耗时（毫秒）
         """
         return max(0, int((self._utcnow() - started_at).total_seconds() * 1000))
 
     def _utcnow(self) -> datetime:
-        """统一生成带时区的 UTC 时间。"""
+        """统一生成带时区的 UTC 时间"""
         return datetime.now(timezone.utc)
