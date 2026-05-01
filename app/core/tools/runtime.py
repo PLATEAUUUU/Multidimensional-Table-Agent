@@ -26,12 +26,19 @@ from __future__ import annotations
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
-from time import perf_counter
 from typing import Any
 
 from pydantic import BaseModel
 
-from app.core.observer import AgentObserver
+from app.core.hooks.context import (
+    ToolAfterHookPayload,
+    ToolBeforeHookPayload,
+    ToolErrorHookPayload,
+    ToolHookRuntimeContext,
+)
+
+from app.core.hooks.registry import HookRegistry
+from app.core.agent.observer import AgentObserver
 from app.core.tools.errors import (
     ToolError,
     ToolExecutionError,
@@ -51,6 +58,15 @@ ToolRecordSink = Callable[[ToolCallRecord], None | Awaitable[None]]
 class ToolRuntime:
     """
     工具统一执行运行时
+
+    职责：
+        1. 统一工具输入校验
+        2. 统一 observer 埋点
+        3. 统一耗时统计
+        4. 统一错误归一化
+        5. 统一 suggest 生成
+        6. 统一 ToolResult / ToolCallRecord 构造
+        7. 在固定执行协议上挂接可插拔 hooks
     """
 
     def __init__(
@@ -58,10 +74,12 @@ class ToolRuntime:
         observer: AgentObserver,
         *,
         record_sink: ToolRecordSink | None = None,
+        hook_registry: HookRegistry | None = None,
         default_max_attempts: int = 1,
     ) -> None:
         self.observer = observer
         self.record_sink = record_sink
+        self.hook_registry = hook_registry
         self.default_max_attempts = max(1, default_max_attempts)
 
     async def invoke(
@@ -87,9 +105,15 @@ class ToolRuntime:
         """
         started_at = self._utcnow()
         attempts = max(1, max_attempts or self.default_max_attempts)
-        raw_arguments = self._serialize_args(raw_args)
+        runtime_ctx = self._build_tool_hook_runtime_context(context)
 
-        # 先记录工具调用开始
+        original_arguments = self._serialize_args(raw_args)
+        before_payload = await self._run_before_tool_hooks(
+            runtime_ctx=runtime_ctx,
+            raw_args=original_arguments,
+        )
+        effective_arguments = dict(before_payload.raw_args)
+
         self.observer.record_tool_call(
             tool_name=tool.name,
             trace_id=context.trace_id,
@@ -97,29 +121,36 @@ class ToolRuntime:
                 "run_id": context.run_id,
                 "agent_name": context.agent_name,
                 "tool_call_id": getattr(context, "tool_call_id", None),
-                "arguments": raw_arguments,
+                "arguments": effective_arguments,
                 "max_attempts": attempts,
             },
         )
 
-        # 输入校验失败不应该进入重试
         try:
-            parsed_args = self._validate_input(tool, raw_args)
+            parsed_args = self._validate_input(tool, effective_arguments)
         except Exception as exc:
             duration_ms = self._elapsed_ms_from(started_at)
             normalized_error = normalize_tool_error(exc, tool_name=tool.name)
+            normalized_error = await self._run_tool_error_hooks(
+                runtime_ctx=runtime_ctx,
+                raw_args=effective_arguments,
+                error=normalized_error,
+            )
+
             result = self._build_failure_result(
                 tool=tool,
                 context=context,
                 error=normalized_error,
-                raw_args=raw_arguments,
+                raw_args=effective_arguments,
                 duration_ms=duration_ms,
                 attempt=1,
                 max_attempts=attempts,
             )
+            result = await self._run_after_tool_hooks(runtime_ctx=runtime_ctx, result=result)
+
             record = self._build_call_record(
                 context=context,
-                arguments=raw_arguments,
+                arguments=effective_arguments,
                 started_at=started_at,
                 duration_ms=duration_ms,
                 result=result,
@@ -128,7 +159,6 @@ class ToolRuntime:
             self._record_tool_result(result, attempt=1, max_attempts=attempts)
             return result
 
-        # 真正执行阶段才允许重试
         last_error: ToolError | None = None
 
         for attempt in range(1, attempts + 1):
@@ -145,10 +175,11 @@ class ToolRuntime:
                         "max_attempts": attempts,
                     },
                 )
+                result = await self._run_after_tool_hooks(runtime_ctx=runtime_ctx, result=result)
 
                 record = self._build_call_record(
                     context=context,
-                    arguments=raw_arguments,
+                    arguments=effective_arguments,
                     started_at=started_at,
                     duration_ms=duration_ms,
                     result=result,
@@ -159,6 +190,11 @@ class ToolRuntime:
 
             except Exception as exc:
                 last_error = normalize_tool_error(exc, tool_name=tool.name)
+                last_error = await self._run_tool_error_hooks(
+                    runtime_ctx=runtime_ctx,
+                    raw_args=effective_arguments,
+                    error=last_error,
+                )
 
                 if attempt < attempts and self._should_retry(last_error, attempt, attempts):
                     continue
@@ -168,14 +204,16 @@ class ToolRuntime:
                     tool=tool,
                     context=context,
                     error=last_error,
-                    raw_args=raw_arguments,
+                    raw_args=effective_arguments,
                     duration_ms=duration_ms,
                     attempt=attempt,
                     max_attempts=attempts,
                 )
+                result = await self._run_after_tool_hooks(runtime_ctx=runtime_ctx, result=result)
+
                 record = self._build_call_record(
                     context=context,
-                    arguments=raw_arguments,
+                    arguments=effective_arguments,
                     started_at=started_at,
                     duration_ms=duration_ms,
                     result=result,
@@ -184,24 +222,31 @@ class ToolRuntime:
                 self._record_tool_result(result, attempt=attempt, max_attempts=attempts)
                 return result
 
-        # 理论上不会走到这里，作为保护分支
         fallback_error = last_error or ToolExecutionError(
             "Tool execution failed with unknown state",
             tool_name=tool.name,
         )
+        fallback_error = await self._run_tool_error_hooks(
+            runtime_ctx=runtime_ctx,
+            raw_args=effective_arguments,
+            error=fallback_error,
+        )
+
         duration_ms = self._elapsed_ms_from(started_at)
         result = self._build_failure_result(
             tool=tool,
             context=context,
             error=fallback_error,
-            raw_args=raw_arguments,
+            raw_args=effective_arguments,
             duration_ms=duration_ms,
             attempt=attempts,
             max_attempts=attempts,
         )
+        result = await self._run_after_tool_hooks(runtime_ctx=runtime_ctx, result=result)
+
         record = self._build_call_record(
             context=context,
-            arguments=raw_arguments,
+            arguments=effective_arguments,
             started_at=started_at,
             duration_ms=duration_ms,
             result=result,
@@ -246,7 +291,6 @@ class ToolRuntime:
     ) -> dict[str, Any]:
         """
         真正执行工具本体
-
         这里不做业务逻辑，只负责调用工具接口并做最基本的输出约束
         """
         result = await tool.ainvoke(parsed_args)  # type: ignore[arg-type]
@@ -263,11 +307,6 @@ class ToolRuntime:
     def _resolve_input_model(self, tool: BaseTool[Any]) -> type[ToolInput] | None:
         """
         从工具实例读取输入 schema
-
-        推荐每个工具声明：
-            input_model = SomeToolInput
-
-        这样 runtime 才能统一做 schema 校验。
         """
         input_model = getattr(tool, "input_model", None)
         if input_model is None:
@@ -301,11 +340,6 @@ class ToolRuntime:
         - ToolTimeoutError：允许重试
         - ToolExecutionError：允许重试
         - 其他错误：不重试
-
-        说明：
-        - 是否无限重试绝不能放在 errors.py
-        - 尝试次数是 runtime 策略
-        - 如果最终耗尽重试预算，返回失败 ToolResult；是否升级为 AgentError，由 Agent 层决定
         """
         if attempt >= max_attempts:
             return False
@@ -334,7 +368,6 @@ class ToolRuntime:
                     "核对字段名、字段类型和必填项是否与 input_model 一致。",
                 ]
             )
-
         elif isinstance(error, ToolOutputValidationError):
             suggestions.extend(
                 [
@@ -342,7 +375,6 @@ class ToolRuntime:
                     "确认工具输出字段是否缺失或类型不匹配。",
                 ]
             )
-
         elif isinstance(error, ToolTimeoutError):
             suggestions.extend(
                 [
@@ -350,14 +382,12 @@ class ToolRuntime:
                     "必要时提高 timeout，或稍后再试。",
                 ]
             )
-
         elif isinstance(error, ToolUnavailableError):
             suggestions.extend(
                 [
                     "检查工具依赖的配置、环境变量或外部服务是否可用。",
                 ]
             )
-
         elif isinstance(error, ToolExecutionError):
             suggestions.extend(
                 [
@@ -384,7 +414,7 @@ class ToolRuntime:
         max_attempts: int,
     ) -> ToolResult:
         """
-        统一构造失败 ToolResult
+        统一构造失败 ToolResult。
         """
         suggest = self._build_suggestions(
             tool,
@@ -415,13 +445,6 @@ class ToolRuntime:
         duration_ms: int,
         result: ToolResult,
     ) -> ToolCallRecord:
-        """
-        为日志和持久化构造调用记录
-
-        说明：
-        - ToolCallRecord 是调用记录
-        - ToolResult 是执行结果
-        """
         finished_at = self._utcnow()
         return ToolCallRecord(
             context=context,
@@ -439,9 +462,6 @@ class ToolRuntime:
         attempt: int,
         max_attempts: int,
     ) -> None:
-        """
-        把工具结果写入 observer
-        """
         metadata: dict[str, Any] = {
             "run_id": result.run_id,
             "agent_name": result.agent_name,
@@ -463,9 +483,6 @@ class ToolRuntime:
         )
 
     async def _emit_record(self, record: ToolCallRecord) -> None:
-        """
-        把 ToolCallRecord 发给外部 sink，用于落日志或持久化
-        """
         if self.record_sink is None:
             return
 
@@ -473,31 +490,67 @@ class ToolRuntime:
         if inspect.isawaitable(maybe_awaitable):
             await maybe_awaitable
 
+    async def _run_before_tool_hooks(
+        self,
+        *,
+        runtime_ctx: ToolHookRuntimeContext,
+        raw_args: dict[str, Any],
+    ) -> ToolBeforeHookPayload:
+        if self.hook_registry is None:
+            return ToolBeforeHookPayload(raw_args=raw_args)
+
+        payload = ToolBeforeHookPayload(raw_args=raw_args)
+        return await self.hook_registry.run_before_tool_call(runtime_ctx, payload)
+
+    async def _run_after_tool_hooks(
+        self,
+        *,
+        runtime_ctx: ToolHookRuntimeContext,
+        result: ToolResult,
+    ) -> ToolResult:
+        if self.hook_registry is None:
+            return result
+
+        payload = ToolAfterHookPayload(result=result)
+        payload = await self.hook_registry.run_after_tool_call(runtime_ctx, payload)
+        return payload.result
+
+    async def _run_tool_error_hooks(
+        self,
+        *,
+        runtime_ctx: ToolHookRuntimeContext,
+        raw_args: dict[str, Any],
+        error: ToolError,
+    ) -> ToolError:
+        if self.hook_registry is None:
+            return error
+
+        payload = ToolErrorHookPayload(raw_args=raw_args, error=error)
+        payload = await self.hook_registry.run_on_tool_error(runtime_ctx, payload)
+        return payload.error
+
+    def _build_tool_hook_runtime_context(
+        self,
+        context: ToolCallContext,
+    ) -> ToolHookRuntimeContext:
+        return ToolHookRuntimeContext(
+            trace_id=context.trace_id,
+            run_id=context.run_id,
+            tool_name=context.tool_name,
+            agent_name=context.agent_name,
+            tool_call_id=getattr(context, "tool_call_id", None),
+        )
+
     def _serialize_args(self, raw_args: Mapping[str, Any] | BaseModel) -> dict[str, Any]:
-        """
-        统一把输入参数转成可记录的 dict
-        """
         if isinstance(raw_args, BaseModel):
             return raw_args.model_dump()
         return dict(raw_args)
 
     def _summarize_data(self, data: Any) -> Any:
-        """
-        生成轻量级结果摘要，避免 observer 日志过重
-
-        当前策略比较保守：
-        - dict 原样返回
-        - 其他类型直接返回
-        你后续可以根据日志量再做截断和脱敏
-        """
         return data
 
     def _elapsed_ms_from(self, started_at: datetime) -> int:
-        """
-        计算从 started_at 到现在的耗时（毫秒）
-        """
         return max(0, int((self._utcnow() - started_at).total_seconds() * 1000))
 
     def _utcnow(self) -> datetime:
-        """统一生成带时区的 UTC 时间"""
         return datetime.now(timezone.utc)
