@@ -54,9 +54,6 @@ class ToolError(Exception):
         if self.details:
             payload["details"] = self.details
 
-        if self.suggest:
-            payload["suggest"] = self.suggest
-
         if self.cause:
             payload["cause_type"] = self.cause.__class__.__name__
             payload["cause_message"] = str(self.cause)
