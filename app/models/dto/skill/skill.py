@@ -23,9 +23,7 @@ SkillSource = Literal["filesystem"]
 
 class SkillFrontmatter(BaseModel):
     """
-    从 SKILL.md frontmatter 解析出的结构。
-
-    当前先只支持 MVP 必需字段。
+    从 SKILL.md frontmatter 解析出的结构
     """
 
     model_config = ConfigDict(extra="ignore", from_attributes=True)
@@ -81,7 +79,7 @@ class SkillFrontmatter(BaseModel):
 
 class SkillEntry(BaseModel):
     """
-    skill 注册条目。
+    skill 注册条目
 
     说明：
     - 这是 loader / registry 的核心数据结构
@@ -153,7 +151,7 @@ class SkillEntry(BaseModel):
         source: SkillSource = "filesystem",
     ) -> "SkillEntry":
         """
-        从解析后的 frontmatter 构造 SkillEntry。
+        从解析后的 frontmatter 构造 SkillEntry
         """
         return cls(
             name=frontmatter.name,
@@ -172,7 +170,7 @@ class SkillEntry(BaseModel):
 
 class SkillCatalogItem(BaseModel):
     """
-    给模型看的 skill catalog 条目。
+    给模型看的 skill catalog 条目
 
     说明：
     - 这是 runtime 生成 <available_skills> 时最适合使用的轻量结构
@@ -198,7 +196,7 @@ class SkillCatalogItem(BaseModel):
 
 class SkillApplyResult(BaseModel):
     """
-    一次 skill 应用后的结果。
+    一次 skill 应用后的结果
 
     说明：
     - runtime 选中某个 skill 后，返回这个结构
